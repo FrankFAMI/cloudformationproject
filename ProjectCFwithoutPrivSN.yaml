@@ -1,0 +1,323 @@
+Parameters:
+  fbucketName:
+    Type: String
+    Default: "fmys3"
+    Description: "Enter Your S3 Bucket"
+
+  vpcCIDR:
+    Type: String
+    Default: "10.10.0.0/16"
+    Description: "Enter Your VPC CIDR"
+
+  AMIid:
+    Type: String
+    Default: ami-0a0277ba899dd9fd3
+    Description: "Enter your ami id"
+
+  AZ1:
+    Type: String
+    Default: "us-east-2a"
+  
+  AZ2:
+    Type: String
+    Default: "us-east-2b"
+
+  Pubs1CIDR:
+     Type: String
+     Default: "10.10.1.0/24"
+
+   
+  Pubs2CIDR:
+     Type: String
+     Default: "10.10.2.0/24"
+
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - m1.small
+      - m1.large
+    Description: "Enter t2.micro, m1.small, or m1.large. Default is t2.micro."
+  
+  EC2keyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+  
+  DBInstanceID:
+    Default: mydbinstance
+    Description: My database instance
+    Type: String
+    
+  DBName:
+    Default: mydb
+    Description: My database
+    Type: String
+    
+  DBInstanceClass:
+    Default: db.t3.micro
+    Description: DB instance class
+    Type: String
+   
+  DBAllocatedStorage:
+    Default: '20'
+    Description: The size of the database (GiB)
+    Type: Number
+    
+  DBUsername:
+    NoEcho: 'true'
+    Default: admin
+    Description: Username for MySQL database access
+    Type: String
+    
+  DBPassword:
+    NoEcho: 'true'
+    Default: "Metroc123!"
+    Description: Password MySQL database access
+    Type: String
+    
+  DBport:
+     Type: Number
+     Default: "3306"
+     Description: "Enter your db port"
+
+Resources:
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref fbucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  customVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref vpcCIDR
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Key: stack
+          Value: production
+
+  customInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: stack
+          Value: production
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref customVPC
+      InternetGatewayId: !Ref customInternetGateway
+
+  pubRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref customVPC
+      Tags:
+        - Key: stack
+          Value: production  
+
+  pubRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref pubRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref customInternetGateway
+
+
+  pubSubnetS1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref customVPC
+      CidrBlock: !Ref Pubs1CIDR
+      AvailabilityZone: !Ref AZ1
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: stack
+        Value: production
+
+  pubSubnetS2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref customVPC 
+      CidrBlock: !Ref Pubs2CIDR
+      AvailabilityZone: !Ref AZ2
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: stack
+        Value: production
+  
+  pubSubnetS1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: pubSubnetS1
+      RouteTableId:
+        Ref: pubRouteTable
+
+  pubSubnetS2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: pubSubnetS2
+      RouteTableId:
+        Ref: pubRouteTable
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !Ref customVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !Ref customVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DBport
+          ToPort: !Ref DBport
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+ 
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckPath: "/"
+      Name: MyTargets
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance  # Change TargetType to 'instance' for EC2 instances
+      VpcId: !Ref customVPC
+
+  MyLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets: 
+        - !Ref pubSubnetS1
+        - !Ref pubSubnetS2
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Name: MyLoadBalancer
+      Scheme: internet-facing
+      Type: application
+      Tags: 
+        - Key: Name
+          Value: MyLoadBalancer
+      IpAddressType: ipv4
+
+  MyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+      LoadBalancerArn: !Ref MyLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  
+  myLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        ImageId: !Ref AMIid
+        InstanceType: !Ref InstanceTypeParameter
+
+  myASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref myLaunchTemplate
+        Version: !GetAtt myLaunchTemplate.LatestVersionNumber
+      MaxSize: '4'
+      MinSize: '2'
+      VPCZoneIdentifier: 
+        - !Ref pubSubnetS1
+        - !Ref pubSubnetS2
+
+  RootRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+  RolePolicies: 
+    Type: "AWS::IAM::Policy"
+    Properties: 
+      PolicyName: "root"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Action: "*"
+            Resource: "*"
+      Roles: 
+        - Ref: "RootRole"
+
+  RootInstanceProfile: 
+    Type: "AWS::IAM::InstanceProfile"
+    Properties: 
+      Path: "/"
+      Roles: 
+        - Ref: "RootRole"
+
+  myDBSubnetGroup: 
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties: 
+      DBSubnetGroupDescription: description
+      SubnetIds: 
+        - !Ref pubSubnetS1
+        - !Ref pubSubnetS2
+
+  MyDB:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceID
+      DBName: !Ref DBName
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      Engine: MySQL
+      EngineVersion: "8.0.33"
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref myDBSubnetGroup
+      Port: !Ref DBport
+ 
+  
